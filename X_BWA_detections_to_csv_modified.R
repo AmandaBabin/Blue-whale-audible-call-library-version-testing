@@ -1,0 +1,120 @@
+## Baleen Detection Table
+# converting LFDCS detection output to a table of baleen detections for Pamlab validation
+
+# Authors: G. Macklin and J. Stanistreet 2022
+
+
+# Download and install packages if not already installed: pacman
+if (!require("pacman")) install.packages("pacman")
+
+# Then open the packages
+library(pacman)
+p_load(tidyverse,lubridate,readxl)
+
+
+### Change these ####
+
+deployment_code ="GBK_2019_10"
+
+Folderpath <- r"(\\142.2.83.52\whalenas2\MOORED_PAM_DATA\2019\10\GBK_2019_10\AMAR702.1.256000)"   #path to .wav folders on working hard drive
+
+data_source <- "v7_17clusters_MD4" # v2_additional exemplars 
+                                         # v3_pooled
+                                         # v4_reduced
+                                         # v5_12clusters
+                                         # v6_12clusters_MD4
+                                         # v7_17clusters_MD4
+### Run These ####
+
+## Read .wav filenames into R ##
+
+Year <- str_sub(deployment_code, start = -7, end = -4)
+Month <- str_sub(deployment_code, start = -2, end = -1)
+
+audio_data <-list.files(Folderpath, pattern = ".wav")
+
+#AMAR data with 4-digit year
+audio <- audio_data %>%
+  as_tibble_col(column_name = "Filename") %>%
+  mutate(datestring = str_extract(Filename, "\\d{8}\\w\\d{6}\\w")) %>%
+  mutate(filedate = as_datetime(datestring, format="%Y%m%dT%H%M%SZ"))
+
+#SoundTrap data with 2-digit year
+#audio <- audio_data %>%
+#  as_tibble_col(column_name = "Filename") %>%
+#  mutate(datestring = str_extract(Filename, "\\d{12}")) %>%
+#  mutate(filedate = as_datetime(datestring, format="%y%m%d%H%M%S"))
+  
+## Read LFDCS outputs and .wav filenames into R for Blue whale audible calls  ##
+
+lfdcs_fileBWA <-list.files(paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                                  r"(\Validation\LFDCS_Outputs\)"), pattern = "_BWA_")
+
+
+lfdcs_dataBWA <- read.csv(paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                                 r"(\Validation\LFDCS_Outputs\)",lfdcs_fileBWA), header= FALSE)
+
+### PLEASE MAKE SURE THERE ARE 11 VARIABLES! IF THERE ISN'T, RESAVE THE CSV ###
+
+sp_HF_code <- c('30'="BmA",'31'="BmA",'32'="BmA",'33'="BmA",'34'="BmA",'35'="BmA",'36'="BmA",'37'="BmA",'38'="BmA",'39'="BmA",'40'="BmA",'41'="BmA")
+
+lfdcsBWA<-lfdcs_dataBWA%>%
+ {# Detect blank rows before modifying
+    blank_indices <- which(apply(., 1, function(row) all(is.na(row) | row == "")))
+    start_row <- blank_indices[2] + 1
+    cleaned <- slice(., start_row:nrow(.))} %>% 
+  select(c(V1,V2,V9))%>%
+  rename(Species=V1,
+         StartTime = V2,
+         MDist=V9)%>%
+  mutate(StartTime = as.numeric(StartTime),
+         StartDateTime = as_datetime(StartTime))%>%
+  rowwise() %>% 
+  mutate(Filename = audio$Filename[max(which(audio$filedate <= StartDateTime))]) %>% 
+  ungroup()%>%
+  select(-c(StartTime, StartDateTime))
+
+
+## Make the detection sheet for blue whale audible calls ##
+
+detectionsBWA<- lfdcsBWA%>%
+  transmute(Filename=Filename,
+            Species = case_when(Species %in% names(sp_HF_code)~ sp_HF_code[Species],
+                                TRUE~ NA_character_),
+            MD2 = case_when(MDist <=2.00 ~1, TRUE~0),
+            MD3 = case_when(MDist <=3.00 ~1, TRUE~0),
+            MD4 = case_when(MDist <=4.00 ~1, TRUE~0)) %>%
+  group_by(Filename,Species) %>%
+  summarize(MD2 = sum(MD2), MD3 = sum(MD3), MD4 = sum(MD4)) %>%
+  ungroup()
+
+all.detect <-  read.csv(paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                               r"(\Validation\ArkLite_Inputs\)",deployment_code,"_MBDetections.csv"))
+
+detectionsALL <-bind_rows(detectionsBWA,all.detect)%>%
+  group_by(Filename,Species) %>%
+  summarize(MD2 = sum(MD2), MD3 = sum(MD3), MD4 = sum(MD4)) %>%
+  ungroup() %>% 
+  write_csv(paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                   r"(\Validation\ArkLite_Inputs\)",deployment_code,"_MBDetections.csv"))
+
+#### Make filename lists per species, per MDIST for Arklite ###
+
+
+##Blue Whale
+
+files_BmA2 <- detectionsBWA %>%
+  filter(Species == "BmA", MD2 !=0)%>%
+  select(Filename) %>% 
+  {if (nrow(.)>0) write_csv(.,paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                                     r"(\Validation\ArkLite_Inputs\)",deployment_code,"_BmA2_v2.csv"), col_names = FALSE)
+    else print("Data not available")}
+
+
+files_BmA4 <- detectionsBWA %>%
+  filter(Species == "BmA", MD4 !=0)%>%
+  select(Filename) %>% 
+  {if(nrow(.)>0) write_csv(.,paste0(r"(E:\new versions\)",data_source,"\\",deployment_code,
+                                    r"(\Validation\ArkLite_Inputs\)",deployment_code,"_BmA4_v2.csv"), col_names = FALSE)
+    else print("Data not available")}
+
